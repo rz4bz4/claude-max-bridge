@@ -26,6 +26,16 @@ set.** The HTTP hop sits between your client and the bridge, not between
 > the common advice about `claude -p` and tool calls is wrong. If you only read
 > one thing here, read that.
 
+## Works with
+
+| Client | Status |
+|---|---|
+| **[Hermes](https://github.com/NousResearch/hermes-agent)** | ✅ **Verified in daily use.** Multi-turn tool loops, ~170 MCP tools, streaming, failover. Config example [below](#hermes). |
+| Anything else speaking OpenAI Chat Completions | ⚠️ **Should work, untested.** The bridge is client-agnostic by design — it never assumes a naming convention or a tool-loop implementation. But Hermes is the only client it has actually been run against, so treat everything else as unverified rather than supported. |
+
+If you get it working with another client, a note in an issue would be useful —
+both to list it here and to find out where the abstraction leaks.
+
 ---
 
 ## Read this before you use it
@@ -181,6 +191,59 @@ that omits the key is rejected at startup rather than silently running open.
 
 The bridge also refuses to start on a non-loopback `server.host` when
 `authToken` is `false`, and warns loudly on any non-loopback bind.
+
+### Hermes
+
+Add a provider block to `~/.hermes/config.yaml`:
+
+```yaml
+providers:
+  claude-max-bridge:
+    api: http://127.0.0.1:8766/v1
+    name: Claude Max via claude-max-bridge (local)
+    transport: chat_completions
+    # Hermes reads the bearer token from this environment variable.
+    # Its value must equal server.authToken in bridge.config.json5.
+    key_env: CLAUDE_MAX_BRIDGE_TOKEN
+    default_model: claude-sonnet
+    models:
+      claude-sonnet:
+        context_length: 1000000
+      claude-opus:
+        context_length: 1000000
+      claude-haiku:
+        context_length: 200000
+```
+
+```bash
+export CLAUDE_MAX_BRIDGE_TOKEN='<the same value as server.authToken>'
+```
+
+Two things worth getting right:
+
+- **The model keys must match the `models` map in `bridge.config.json5`.** They
+  are the bridge's aliases, not Anthropic model IDs — the bridge translates them
+  and returns HTTP 400 for anything it does not recognise, so a typo fails loudly
+  rather than silently answering from the wrong model.
+- **`context_length` here is a downstream declaration and controls nothing.** The
+  real context window comes from which Claude model the alias maps to — see
+  [finding 5](#5-the-1m-context-window-comes-from-the-model-choice-not-a-setting).
+  Setting `1000000` against an alias that resolves to `claude-sonnet-4-6` will not
+  give you a million tokens; it will give you a confusing error at ~200k.
+
+To use it as a failover target rather than the primary model:
+
+```yaml
+fallback_providers:
+  - provider: claude-max-bridge
+    model: claude-sonnet
+    base_url: http://127.0.0.1:8766/v1
+```
+
+That is worth doing regardless of how you use it. The bridge maps quota
+exhaustion to a real **429** and auth failure to a **502** precisely so a client
+can fail over instead of relaying an error message to your user as if it were an
+answer.
 
 For running it as a background service, see
 [`examples/com.example.claude-max-bridge.plist`](examples/com.example.claude-max-bridge.plist).
@@ -430,7 +493,8 @@ Reza Sabaro — [LinkedIn](https://se.linkedin.com/in/reza-s-58288b26) ·
 [GitHub](https://github.com/rz4bz4)
 
 Issues and pull requests welcome, particularly for the gaps listed under "Not
-implemented" and for a first-class auth check on the HTTP layer.
+implemented" and for reports of the bridge working — or not — against clients
+other than Hermes.
 
 ## License
 
