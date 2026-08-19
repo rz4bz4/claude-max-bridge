@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import http from 'node:http';
-import { loadConfig, type BridgeConfig } from './config.js';
+import { timingSafeEqual } from 'node:crypto';
+import { loadConfig, isLoopback, type BridgeConfig } from './config.js';
 import { setLogLevel, log } from './logger.js';
 import { verifyAuthAtStartup, AuthError } from './auth.js';
 import { buildToolMapping } from './toolmap.js';
@@ -43,6 +44,20 @@ try {
   process.exit(3);
 }
 
+if (cfg.server.authToken === false) {
+  log.warn(
+    'server.authToken=false — this endpoint is UNAUTHENTICATED. Any local process, ' +
+      'and any web page you visit (via a CORS-safelisted text/plain POST), can spend ' +
+      'your subscription quota through it. Set server.authToken to a shared secret.',
+  );
+}
+if (!isLoopback(cfg.server.host)) {
+  log.warn(
+    `server.host=${cfg.server.host} is not a loopback address — the bridge is reachable ` +
+      'off this machine. Make sure that is what you intended.',
+  );
+}
+
 log.info('claude-max-bridge starting', {
   config: configPath,
   claude: cfg.claude.path,
@@ -62,7 +77,50 @@ const health = {
   overageSeen: false,
   requests: 0,
   authFailures: 0,
+  authRejections: 0,
 };
+
+/**
+ * Constant-time comparison of the presented bearer token against the configured
+ * one. Length is compared first because timingSafeEqual throws on a mismatch.
+ */
+function tokenMatches(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Returns null when the request is authorised, or an error message when it is not.
+ *
+ * Accepts `Authorization: Bearer <token>` (what OpenAI-compatible clients already
+ * send as their API key) and a bare `Authorization: <token>` for convenience.
+ */
+function checkAuth(req: http.IncomingMessage): string | null {
+  if (cfg.server.authToken === false) return null;
+
+  const header = req.headers.authorization;
+  if (!header) {
+    return (
+      'missing Authorization header. This bridge requires a shared secret: send it as ' +
+      '"Authorization: Bearer <token>". In an OpenAI-compatible client, put the token ' +
+      'in the API-key field. The expected value is server.authToken in your bridge config.'
+    );
+  }
+
+  const presented = header.startsWith('Bearer ') ? header.slice(7).trim() : header.trim();
+  if (!presented) {
+    return 'Authorization header is present but empty.';
+  }
+  if (!tokenMatches(presented, cfg.server.authToken)) {
+    return (
+      'invalid token. The value must match server.authToken in your bridge config ' +
+      '(not your Anthropic key — the bridge never accepts one over HTTP).'
+    );
+  }
+  return null;
+}
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   const buf = Buffer.from(JSON.stringify(body));
@@ -209,10 +267,24 @@ const server = http.createServer((req, res) => {
       toolLoopOwner: cfg.toolLoop.owner,
       builtinTools: cfg.toolLoop.builtinTools,
       permissionMode: cfg.toolLoop.permissionMode,
-      tokenFile: cfg.auth.tokenFile,
+      // Deliberately not the path — that discloses the local username. /health is
+      // intentionally readable without a token so it stays usable for monitoring.
+      tokenFileConfigured: Boolean(cfg.auth.tokenFile),
+      authRequired: cfg.server.authToken !== false,
       ...health,
     });
     return;
+  }
+
+  // /health is deliberately open (monitoring); everything under /v1 is gated.
+  if (url.startsWith('/v1/')) {
+    const problem = checkAuth(req);
+    if (problem) {
+      health.authRejections += 1;
+      log.warn('rejected unauthenticated request', { url, method: req.method });
+      json(res, 401, errorBody(problem, 'authentication_error'));
+      return;
+    }
   }
 
   if (req.method === 'GET' && url === '/v1/models') {

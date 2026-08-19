@@ -14,8 +14,24 @@
 // between claude and Anthropic.
 {
   server: {
+    // Keep this on loopback. The bridge refuses to start on a non-loopback
+    // address unless authToken is set, and warns even then.
     host: "127.0.0.1",
     port: 8766,
+
+    // Shared secret clients must present as "Authorization: Bearer <token>".
+    // In an OpenAI-compatible client, put this in the API-key field.
+    //
+    // This key is REQUIRED to be present. There is no default, because the
+    // default would have to be "no authentication" — and an unauthenticated
+    // bridge on localhost is still reachable from any web page you visit, via a
+    // CORS-safelisted text/plain POST. That page cannot read the response, but
+    // it can spend your subscription quota.
+    //
+    // Generate one with:  openssl rand -hex 32
+    // Minimum 16 characters. Set to the literal false to disable authentication
+    // deliberately (loopback binds only).
+    authToken: "CHANGE-ME-openssl-rand-hex-32",
   },
 
   claude: {

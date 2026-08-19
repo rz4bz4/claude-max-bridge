@@ -115,8 +115,9 @@ without a fallback provider. Mine has one.
 - A paid Claude subscription (Pro or Max). This does not work on the free tier.
 - Claude Code installed and working — verified against **2.1.220**.
 - Node.js 20+.
-- macOS or Linux. Developed on macOS; nothing in it is macOS-specific except the
-  example launchd agent.
+- macOS. Nothing in the code is macOS-specific except the example launchd agent,
+  so it should run on Linux unchanged — but that is untested, so treat Linux as
+  unverified rather than supported. Reports welcome.
 
 ## Install
 
@@ -161,22 +162,25 @@ curl -s http://127.0.0.1:8766/health | python3 -m json.tool
 python3 verify.py
 ```
 
-Point any OpenAI-compatible client at `http://127.0.0.1:8766/v1` with any API
-key string.
+Point any OpenAI-compatible client at `http://127.0.0.1:8766/v1`, putting your
+`server.authToken` in the client's API-key field. Everything under `/v1` requires
+it; `/health` stays open so monitoring keeps working.
 
-**Security note, please read.** The bridge does **no** authentication. It checks
-no `Authorization` header, no `Origin`, and no `Content-Type`. That means:
+### Why there is a token at all
 
-- **Keep `server.host` on `127.0.0.1`.** The config binds whatever you put there,
-  including `0.0.0.0`. Exposing this on a LAN hands anyone who can reach the port
-  free use of your subscription.
-- **Even on localhost it is reachable from a web page.** `text/plain` is a
-  CORS-safelisted content type, so any site you visit can `fetch()` this endpoint
-  without a preflight. It cannot read the response cross-origin, so this is not
-  data exfiltration — but it *is* unauthenticated consumption of your quota by
-  any website, on a project whose entire point is quota. If that bothers you, put
-  it behind a reverse proxy requiring a shared secret. Patches adding a
-  first-class token check are welcome.
+An unauthenticated endpoint on localhost is **not** private. `text/plain` is a
+CORS-safelisted content type, so any web page you visit can `fetch()` a localhost
+port without a preflight. It cannot read the response cross-origin — so this is
+not data exfiltration — but it *is* unauthenticated spending of your subscription
+quota by any website, on a project whose entire point is quota.
+
+So `server.authToken` is a **required** config key with no default. Set it to a
+shared secret of at least 16 characters, or to the literal `false` if you have
+read the above and want to run without it on a loopback bind you trust. A config
+that omits the key is rejected at startup rather than silently running open.
+
+The bridge also refuses to start on a non-loopback `server.host` when
+`authToken` is `false`, and warns loudly on any non-loopback bind.
 
 For running it as a background service, see
 [`examples/com.example.claude-max-bridge.plist`](examples/com.example.claude-max-bridge.plist).
@@ -368,6 +372,7 @@ The choices that matter:
 
 | Key | Why |
 |---|---|
+| `server.authToken` | Required. See "Why there is a token at all". |
 | `toolLoop.builtinTools: ["ToolSearch"]` | Finding 1. Don't change it without running `verify.py`. |
 | `toolLoop.permissionMode: "default"` | `bypassPermissions` is refused by `config.ts`. |
 | `toolLoop.strictMcpConfig: true` | Blocks `~/.claude.json` and project-local `.mcp.json`. |
@@ -377,11 +382,14 @@ The choices that matter:
 
 ## Endpoints
 
-| Method | Path | |
-|---|---|---|
-| POST | `/v1/chat/completions` | streaming and non-streaming |
-| GET | `/v1/models` | configured aliases |
-| GET | `/health` | token file, latest quota info, error counters |
+| Method | Path | Auth | |
+|---|---|---|---|
+| POST | `/v1/chat/completions` | required | streaming and non-streaming |
+| GET | `/v1/models` | required | configured aliases |
+| GET | `/health` | open | auth posture, latest quota info, error counters |
+
+`/health` deliberately reports `tokenFileConfigured: true/false` rather than the
+path, which would disclose your local username.
 
 ## Not implemented
 
@@ -398,7 +406,6 @@ The choices that matter:
   somewhere, possibly attacker-controlled — that contains `</tool_result>` or a
   forged turn marker can inject turn boundaries. Treat tool output as untrusted
   and sanitise it on the client side.
-- **Authentication.** See the security note under "Run".
 - **Images.** `image_url` blocks are replaced with a placeholder.
 - **`/v1/messages`** (Anthropic format). OpenAI Chat Completions only.
 
