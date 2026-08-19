@@ -1,0 +1,40 @@
+# ---- Secrets and machine-specific config -------------------------------
+# Only bridge.config.example.json5 belongs in git. Any other
+# bridge.config*.json5 holds real paths for a real machine.
+bridge.config*.json5
+!bridge.config.example.json5
+*.local.json5
+
+# OAuth tokens / keys / credentials — must never be committed.
+oauth-token
+*oauth-token*
+*.token
+token
+tokens/
+*.pem
+*.key
+id_rsa*
+.env
+.env.*
+secrets/
+
+# ---- Agent / editor scratch that can carry private context -------------
+# A project CLAUDE.md or .claude/settings.local.json can contain MCP server
+# names, hostnames and permission rules from a personal setup.
+.claude/
+CLAUDE.md
+AGENTS.md
+.cursor/
+.vscode/
+.idea/
+
+# ---- Build output and dependencies -------------------------------------
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# ---- Logs and runtime state --------------------------------------------
+*.log
+logs/
+.DS_Store

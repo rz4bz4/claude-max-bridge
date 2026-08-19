@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Example launchd agent for claude-max-bridge (macOS).
+
+  Install:
+    1. Replace YOUR_USERNAME and the node path with your own values.
+    2. cp examples/com.example.claude-max-bridge.plist \
+         ~/Library/LaunchAgents/com.example.claude-max-bridge.plist
+    3. launchctl load ~/Library/LaunchAgents/com.example.claude-max-bridge.plist
+
+  launchd gives the process a minimal PATH, which is why claude.path in the
+  config must be absolute and why PATH is set explicitly below.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.claude-max-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/node</string>
+        <string>/Users/YOUR_USERNAME/path/to/claude-max-bridge/dist/index.js</string>
+        <string>--config</string>
+        <string>/Users/YOUR_USERNAME/path/to/claude-max-bridge/bridge.config.json5</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USERNAME/path/to/claude-max-bridge</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/YOUR_USERNAME/.local/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/claude-max-bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/claude-max-bridge.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

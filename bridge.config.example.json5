@@ -1,0 +1,177 @@
+// claude-max-bridge — example configuration
+//
+// Copy this file to `bridge.config.json5` and adjust the paths.
+// `bridge.config.json5` is gitignored on purpose: it holds machine-specific
+// paths and should never be committed.
+//
+// The bridge exposes an OpenAI-compatible /v1/chat/completions and runs the
+// official `claude` binary as a subprocess. The CLIENT owns the tool loop: the
+// bridge NEVER executes a tool, it only reports which tool the model wants to
+// call.
+//
+// Deliberate choice: ANTHROPIC_BASE_URL is NEVER set. `claude` talks straight
+// to Anthropic. The bridge's HTTP sits between the client and the bridge, not
+// between claude and Anthropic.
+{
+  server: {
+    host: "127.0.0.1",
+    port: 8766,
+  },
+
+  claude: {
+    // Absolute path (or ~/...). A service manager such as launchd has a
+    // minimal PATH, so do not rely on `claude` being resolvable.
+    // Find yours with: which claude
+    path: "~/.local/bin/claude",
+  },
+
+  auth: {
+    // Read from disk on EVERY spawn, never cached in memory, so a rotated
+    // token takes effect without restarting the bridge.
+    // Create it with:  claude setup-token   (requires a Claude subscription)
+    tokenFile: "~/.config/claude-max-bridge/oauth-token",
+
+    // Environment variables scrubbed from the child process before spawn.
+    // Purpose: make sure the call runs on the subscription and cannot silently
+    // land on a metered API key or be redirected to another endpoint.
+    // Supports a trailing '*' as a prefix match.
+    clearEnv: [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_API_KEY_OLD",
+      "ANTHROPIC_API_TOKEN",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_CUSTOM_HEADERS",
+      "ANTHROPIC_UNIX_SOCKET",
+      "CLAUDE_CONFIG_DIR",
+      "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "CLAUDE_CODE_USE_VERTEX",
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+      "GOOGLE_APPLICATION_CREDENTIALS",
+      "OTEL_*",
+    ],
+
+    // false = fail-closed. The bridge refuses to start if the token file is
+    // missing or looks wrong, instead of quietly falling back to something
+    // metered.
+    allowMeteredKey: false,
+  },
+
+  toolLoop: {
+    // "client" = your client owns the loop. The bridge starts a dummy MCP
+    //            server that only declares the client's tool schemas and
+    //            returns a placeholder. The model's tool_use is captured from
+    //            the stream and returned as OpenAI tool_calls. Nothing runs here.
+    // "claude" = NOT IMPLEMENTED. Reserved for a harness mode where Claude runs
+    //            real MCP servers itself. See README.
+    owner: "client",
+
+    // Exactly which of Claude's OWN built-in tools may exist.
+    // ["ToolSearch"] is deliberate and necessary:
+    //   - MCP tools are "deferred" in Claude Code 2.1.x; without ToolSearch the
+    //     model cannot find them at all.
+    //   - With only ToolSearch, Bash/Read/Edit/Write/WebFetch are gone.
+    //     Verified: ToolSearch "select:Bash" -> "No matching deferred tools".
+    // Set [] for a plain text model with no tools.
+    builtinTools: ["ToolSearch"],
+
+    // Name of the dummy MCP server. Becomes the prefix the model sees:
+    // mcp__<mcpServerName>__<toolName>
+    mcpServerName: "client",
+
+    // "default" = Claude may only run what is explicitly allowed. The dummy MCP
+    // cannot execute anything anyway, so this is belt and braces.
+    // NEVER use bypassPermissions here — config.ts refuses it.
+    permissionMode: "default",
+
+    // Only MCP servers from our generated config. Blocks ~/.claude.json and
+    // project-local .mcp.json.
+    strictMcpConfig: true,
+
+    // "" = NO settings sources. Deliberate and necessary: with "user",
+    // ~/.claude/CLAUDE.md is loaded into the system prompt and the model starts
+    // mixing your personal Claude Code instructions into the client's answers.
+    // Verified. Note that --safe-mode is NOT an alternative: it disables MCP too.
+    settingSources: "",
+
+    // Inject a short instruction about how the MCP tools are found, plus the
+    // list of names. Necessary: without it the model claimed in roughly 2 out of
+    // 3 runs that the tools "are not available via Claude Code" instead of
+    // looking them up with ToolSearch. The name list costs ~30 chars per tool.
+    injectDiscoveryHint: true,
+    injectToolNames: true,
+  },
+
+  systemPrompt: {
+    // "append"  -> --append-system-prompt (Claude Code's own prompt is kept)
+    // "replace" -> --system-prompt        (replaces it entirely)
+    mode: "append",
+
+    // Warn in the log above this many characters. Does NOT block.
+    // Background: a claim circulates that >~4500 chars of app-specific
+    // instructions can flip billing to the overage lane. That bisection was done
+    // against spoofed direct calls to /v1/messages, not against the real binary.
+    // Measured here with a ~16 kB system prompt via --append-system-prompt:
+    // 200 OK, no 429. Hence a warning, not a cap. Measure it yourself.
+    warnOverChars: 4500,
+
+    // Shout loudly if the response contains the overage signature.
+    detectOverage: true,
+    overagePatterns: ["monthly spend limit", "exceed your account's monthly"],
+  },
+
+  workspace: {
+    // A dedicated EMPTY directory. Reason: otherwise `claude` picks up
+    // ~/.claude/CLAUDE.md and project files and folds them into the system
+    // prompt. Verified problem — see README, "Context leakage".
+    cwd: "~/.local/state/claude-max-bridge/workspace",
+  },
+
+  session: {
+    // "stateless" = every request is a fresh claude process and the whole
+    // conversation is sent in the prompt. The client owns the history, so the
+    // two sides can never disagree about what was said.
+    // "resume" is not implemented — see README, "Not implemented".
+    mode: "stateless",
+  },
+
+  models: {
+    // Your client's model name -> what is passed to `claude --model`.
+    // An unknown name returns HTTP 400, never a silent fallback.
+    //
+    // NOTE: the context window comes from the MODEL CHOICE, not from any setting
+    // here and not from your client's declared context_length.
+    // Measured 2026-08-19 on a Max plan (system/init + modelUsage.contextWindow):
+    //   claude-sonnet-4-6         200 000   included
+    //   claude-sonnet-4-6[1m]           –   REJECTED: "Usage credits required for 1M context"
+    //   claude-opus-4-6[1m]     1 000 000   included
+    //   claude-sonnet-5         1 000 000   included, 1M by default (no beta, no [1m])
+    //   claude-opus-5           1 000 000   included
+    //   sonnet-5 / opus-5 / claude-sonnet-5-<date>  -> HTTP 404
+    // See README, "Context window".
+    "default": "claude-sonnet-5",
+    "fast": "claude-haiku-4-5",
+    "claude-sonnet": "claude-sonnet-5",
+    "claude-opus": "claude-opus-5",
+    "claude-haiku": "claude-haiku-4-5",
+    "claude-sonnet-4-6": "claude-sonnet-4-6",
+  },
+
+  limits: {
+    requestTimeoutMs: 300000,
+    maxTurnRawBytes: 8388608,
+    maxTurnLines: 20000,
+    maxRequestBodyBytes: 10485760,
+  },
+
+  logging: {
+    // debug | info | warn | error
+    // Prompt and response content is never logged at any level — only metadata.
+    // There is no switch to turn payload logging on; that is deliberate.
+    level: "info",
+  },
+}

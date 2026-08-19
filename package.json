@@ -1,0 +1,31 @@
+{
+  "name": "claude-max-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenAI-compatible bridge that runs the official claude binary as a subprocess on your own Claude subscription, with working tool-calls. The client owns the tool loop.",
+  "bin": {
+    "claude-max-bridge": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js"
+  },
+  "dependencies": {
+    "json5": "^2.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "openai-compatible",
+    "mcp",
+    "tool-calls",
+    "bridge"
+  ]
+}
